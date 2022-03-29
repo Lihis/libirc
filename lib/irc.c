@@ -19,7 +19,10 @@ typedef struct {
 typedef enum {
     irc_state_unknown = 0,
     irc_state_connected,
+    irc_state_passline,
+    irc_state_passmismatch,
     irc_state_userline,
+    irc_state_welcome,
     irc_state_ping,
 
     irc_state_ready,
@@ -31,6 +34,8 @@ struct irc_
     pthread_mutex_t buffermtx;
 
     char *nick;
+    char *username;
+    char *password;
     char hostname[100];
     char *realname;
     char *server;
@@ -46,11 +51,25 @@ struct irc_
     irc_queue_t channels;
 };
 
+static void irc_welcome_handler(irc_t i, irc_message_t m, void*unused)
+{
+    i->state = irc_state_ready;
+}
+
+static void irc_passwdmismatch_handler(irc_t i, irc_message_t m, void *unused)
+{
+    i->state = irc_state_passmismatch;
+}
+
 static void irc_ping_handler(irc_t i, irc_message_t m, void *unused)
 {
     /* queue pong
      */
     irc_queue_command(i, "PONG", NULL);
+    if(i->state == irc_state_welcome)
+    {
+        i->state = irc_state_ready;
+    }
 }
 
 static void irc_invite_handler(irc_t i, irc_message_t m, void *unused)
@@ -103,6 +122,8 @@ irc_t irc_new(void)
     pthread_mutex_init(&i->buffermtx, NULL);
     pthread_mutex_init(&i->sendqmtx, NULL);
 
+    irc_handler_add(i, "001", irc_welcome_handler, NULL);
+    irc_handler_add(i, "464", irc_passwdmismatch_handler, NULL);
     irc_handler_add(i, "PING", irc_ping_handler, NULL);
     irc_handler_add(i, "INVITE", irc_invite_handler, NULL);
 
@@ -119,6 +140,8 @@ void irc_free(irc_t i)
     free(i->handler);
     strbuf_free(i->buf);
     free(i->nick);
+    free(i->username);
+    free(i->password);
     free(i->realname);
     free(i->server);
 
@@ -158,6 +181,18 @@ irc_error_t irc_getopt(irc_t i, ircopt_t o, ...)
         *s = i->nick;
     } break;
 
+    case ircopt_username:
+    {
+        char **s = va_arg(lst, char**);
+        *s = i->username;
+    } break;
+
+    case ircopt_password:
+    {
+        char **s = va_arg(lst, char**);
+        *s = i->password;
+    } break;
+
     case ircopt_server:
     {
         char **s = va_arg(lst, char**);
@@ -189,6 +224,18 @@ irc_error_t irc_setopt(irc_t i, ircopt_t o, ...)
     {
         free(i->nick);
         i->nick = strdup(va_arg(lst, char*));
+    } break;
+
+    case ircopt_username:
+    {
+        free(i->username);
+        i->username = strdup(va_arg(lst, char*));
+    } break;
+
+    case ircopt_password:
+    {
+        free(i->password);
+        i->password = strdup(va_arg(lst, char*));
     } break;
 
     case ircopt_server:
@@ -302,26 +349,36 @@ irc_error_t irc_think(irc_t i)
 
     return_if_true(i == NULL, irc_error_argument);
 
-    if (i->state == irc_state_unknown ||
+    if (i->state == irc_state_passmismatch) {
+        return irc_error_password;
+    } else if (i->state == irc_state_unknown ||
         i->state == irc_state_connected) {
         irc_check_data(i);
+        if (i->password != NULL) {
+            r = irc_queue_command(
+                i, "PASS", i->password, NULL);
+            if (IRC_FAILED(r)) {
+                return r;
+            }
+        }
+        i->state = irc_state_passline;
+    } else if (i->state == irc_state_passline) {
         r = irc_queue_command(
             i, "USER",
-            i->nick, i->hostname, i->server, i->realname,
+            (i->username != NULL ? i->username : i->nick),
+            i->hostname, i->server, i->realname,
             NULL
             );
         if (IRC_FAILED(r)) {
             return r;
         }
         i->state = irc_state_userline;
-    }
-
-    if (i->state == irc_state_userline) {
+    } else if (i->state == irc_state_userline) {
         r = irc_queue_command(i, "NICK", i->nick, NULL);
         if (IRC_FAILED(r)) {
             return r;
         }
-        i->state = irc_state_ready;
+        i->state = irc_state_welcome;
     }
 
     r = irc_think_data(i);
@@ -410,6 +467,13 @@ irc_error_t irc_connected(irc_t i)
     i->state = irc_state_connected;
 
     return irc_error_success;
+}
+
+bool irc_ready(irc_t i)
+{
+    return_if_true(i == NULL, false);
+
+    return (i->state == irc_state_ready || i->state == irc_state_welcome);
 }
 
 irc_error_t irc_join(irc_t i, char const *channel)

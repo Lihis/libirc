@@ -23,6 +23,8 @@ struct irc_client_
     irc_t irc;
     char *host;
     char *port;
+    char *username;
+    char *password;
     bool ssl;
     int fd;
 
@@ -74,11 +76,15 @@ irc_client_t irc_client_new_config(irc_config_network_t n)
 
     i->host = strdup(irc_config_network_host(n));
     i->port = strdup(irc_config_network_port(n));
+    i->username = strdup(irc_config_network_username(n));
+    i->password = strdup(irc_config_network_password(n));
     i->ssl = irc_config_network_ssl(n);
 
     /* set nick and IRC server.
      */
     irc_setopt(irc, ircopt_nick, irc_config_network_nick(n));
+    irc_setopt(irc, ircopt_username, i->username);
+    irc_setopt(irc, ircopt_password, i->password);
     irc_setopt(irc, ircopt_server, i->host);
 
     irc_config_network_ref(n);
