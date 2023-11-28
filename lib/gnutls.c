@@ -66,14 +66,19 @@ irc_error_t irc_ssl_client_disconnect(void *arg)
 irc_error_t irc_ssl_client_connect(void *arg, int sock, char const *host)
 {
     gnutls_t *p = (gnutls_t*)arg;
+    gnutls_init_flags_t flags = GNUTLS_CLIENT;
     int ret = 0;
 
     if (p->init == true) {
         return irc_error_internal;
     }
 
+#if GNUTLS_VERSION_NUMBER >= 0x030402
+    flags |= GNUTLS_NO_SIGNAL;
+#endif
+
     /* Initialize TLS session */
-    gnutls_init(&p->session, GNUTLS_CLIENT);
+    gnutls_init(&p->session, flags);
     /* Use default priorities */
     gnutls_set_default_priority(p->session);
     /* put the x509 credentials to the current session */
